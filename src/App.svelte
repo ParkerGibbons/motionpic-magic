@@ -1,6 +1,7 @@
 <script lang="ts">
   import Viewport from './lib/components/Viewport.svelte'
   import Sidebar from './lib/components/Sidebar.svelte'
+  import Timeline from './lib/components/Timeline.svelte'
   import ExportModal from './lib/components/ExportModal.svelte'
   import { settings } from './lib/stores/settings'
   import { theme, toggleTheme } from './lib/stores/theme'
@@ -28,7 +29,10 @@
   </header>
 
   <div class="main-content">
-    <Viewport />
+    <div class="viewport-area">
+      <Viewport />
+      <Timeline />
+    </div>
     <Sidebar />
   </div>
 
@@ -81,6 +85,13 @@
 
   .main-content {
     display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .viewport-area {
+    display: flex;
+    flex-direction: column;
     flex: 1;
     overflow: hidden;
   }

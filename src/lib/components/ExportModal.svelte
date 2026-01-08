@@ -62,7 +62,7 @@
 
       const resolution = resolutions[$settings.exportResolution]
       const fps = $settings.exportFps
-      const duration = $settings.exportDuration
+      const duration = $settings.duration
       const totalFrames = fps * duration
 
       // Create offscreen canvas for rendering at export resolution
@@ -186,7 +186,7 @@
           type="number"
           min="1"
           max="60"
-          bind:value={$settings.exportDuration}
+          bind:value={$settings.duration}
           disabled={isExporting}
         />
       </div>

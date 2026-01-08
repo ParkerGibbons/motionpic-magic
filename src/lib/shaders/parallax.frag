@@ -7,6 +7,42 @@ uniform vec2 resolution;
 uniform vec3 customCameraPos;
 uniform float time;
 
+// DOF uniforms
+uniform int bokehQuality; // 0=fast, 1=medium, 2=high
+uniform bool tiltShiftEnabled;
+uniform float tiltShiftAngle;
+uniform float tiltShiftPosition;
+uniform float tiltShiftBlur;
+
+// Atmosphere uniforms
+uniform bool fogEnabled;
+uniform float fogDensity;
+uniform float fogNear;
+uniform float fogFar;
+uniform vec3 fogColor;
+uniform bool depthTintEnabled;
+uniform vec3 depthTintNearColor;
+uniform vec3 depthTintFarColor;
+uniform float depthTintIntensity;
+
+// Color grading uniforms
+uniform int colorPreset; // 0=none, 1=portra, 2=cinematic, 3=noir, 4=vintage, 5=cool-blue
+uniform float temperature;
+uniform float tint;
+uniform float contrast;
+uniform float saturation;
+uniform float exposure;
+uniform bool splitToneEnabled;
+uniform float splitToneShadowHue;
+uniform float splitToneHighlightHue;
+uniform float splitToneBalance;
+
+// Lens FX uniforms
+uniform bool anamorphicEnabled;
+uniform float anamorphicStretch;
+uniform bool lensFlareEnabled;
+uniform float lensFlareIntensity;
+
 // Post-processing uniforms
 uniform bool filmGrainEnabled;
 uniform float filmGrainIntensity;
@@ -16,53 +52,235 @@ uniform bool vignetteEnabled;
 uniform float vignetteIntensity;
 uniform bool lensDistortionEnabled;
 uniform float lensDistortionAmount;
+uniform bool bloomEnabled;
+uniform float bloomThreshold;
+uniform float bloomIntensity;
+uniform bool halationEnabled;
+uniform float halationIntensity;
+uniform bool sharpenEnabled;
+uniform float sharpenIntensity;
+
+// Render mode uniform
+uniform int renderMode; // 0=normal, 1=depth, 2=depth-color, 3=normals, 4=split
+
+// Parallax mode uniform
+uniform int parallaxMode; // 0=offset, 1=raymarch
 
 varying vec2 vUv;
 
-// Random function for film grain
+// ============================================
+// UTILITY FUNCTIONS
+// ============================================
+
 float random(vec2 st) {
   return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
 }
 
-// Film grain effect
-vec3 applyFilmGrain(vec3 color, vec2 uv) {
-  if (!filmGrainEnabled) return color;
-
-  float grain = random(uv * time) * 2.0 - 1.0;
-  return color + grain * filmGrainIntensity * 0.1;
+// Simplex-style noise for camera shake
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = random(i);
+  float b = random(i + vec2(1.0, 0.0));
+  float c = random(i + vec2(0.0, 1.0));
+  float d = random(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-// Chromatic aberration
-vec3 applyChromaticAberration(sampler2D tex, vec2 uv) {
-  if (!chromaticAberrationEnabled) {
-    return texture2D(tex, uv).rgb;
+// RGB to HSL conversion
+vec3 rgb2hsl(vec3 c) {
+  float maxC = max(c.r, max(c.g, c.b));
+  float minC = min(c.r, min(c.g, c.b));
+  float l = (maxC + minC) / 2.0;
+  
+  if (maxC == minC) {
+    return vec3(0.0, 0.0, l);
   }
-
-  vec2 direction = uv - 0.5;
-  float dist = length(direction);
-
-  vec2 offset = direction * dist * chromaticAberrationIntensity * 0.01;
-
-  float r = texture2D(tex, uv - offset).r;
-  float g = texture2D(tex, uv).g;
-  float b = texture2D(tex, uv + offset).b;
-
-  return vec3(r, g, b);
+  
+  float d = maxC - minC;
+  float s = l > 0.5 ? d / (2.0 - maxC - minC) : d / (maxC + minC);
+  
+  float h;
+  if (maxC == c.r) {
+    h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
+  } else if (maxC == c.g) {
+    h = (c.b - c.r) / d + 2.0;
+  } else {
+    h = (c.r - c.g) / d + 4.0;
+  }
+  h /= 6.0;
+  
+  return vec3(h, s, l);
 }
 
-// Vignette effect
-vec3 applyVignette(vec3 color, vec2 uv) {
-  if (!vignetteEnabled) return color;
-
-  vec2 centered = uv - 0.5;
-  float dist = length(centered);
-  float vignette = smoothstep(0.8, 0.3, dist);
-  vignette = mix(1.0, vignette, vignetteIntensity);
-
-  return color * vignette;
+// Helper for HSL to RGB
+float hue2rgb(float p, float q, float t) {
+  if (t < 0.0) t += 1.0;
+  if (t > 1.0) t -= 1.0;
+  if (t < 1.0/6.0) return p + (q - p) * 6.0 * t;
+  if (t < 1.0/2.0) return q;
+  if (t < 2.0/3.0) return p + (q - p) * (2.0/3.0 - t) * 6.0;
+  return p;
 }
 
-// Lens distortion
+// HSL to RGB conversion
+vec3 hsl2rgb(vec3 hsl) {
+  if (hsl.y == 0.0) {
+    return vec3(hsl.z);
+  }
+  
+  float q = hsl.z < 0.5 ? hsl.z * (1.0 + hsl.y) : hsl.z + hsl.y - hsl.z * hsl.y;
+  float p = 2.0 * hsl.z - q;
+  
+  return vec3(
+    hue2rgb(p, q, hsl.x + 1.0/3.0),
+    hue2rgb(p, q, hsl.x),
+    hue2rgb(p, q, hsl.x - 1.0/3.0)
+  );
+}
+
+// Luminance calculation
+float getLuma(vec3 c) {
+  return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// ============================================
+// COLOR GRADING
+// ============================================
+
+vec3 applyTemperature(vec3 color, float temp) {
+  // Warm: boost red/yellow, Cool: boost blue
+  color.r += temp * 0.1;
+  color.b -= temp * 0.1;
+  color.g += temp * 0.02;
+  return clamp(color, 0.0, 1.0);
+}
+
+vec3 applyTint(vec3 color, float t) {
+  // Green-magenta shift
+  color.g += t * 0.1;
+  color.r -= t * 0.05;
+  color.b -= t * 0.05;
+  return clamp(color, 0.0, 1.0);
+}
+
+vec3 applyContrast(vec3 color, float c) {
+  return clamp((color - 0.5) * c + 0.5, 0.0, 1.0);
+}
+
+vec3 applySaturation(vec3 color, float s) {
+  float lum = getLuma(color);
+  return clamp(mix(vec3(lum), color, s), 0.0, 1.0);
+}
+
+vec3 applyExposure(vec3 color, float e) {
+  return clamp(color * pow(2.0, e), 0.0, 1.0);
+}
+
+vec3 applySplitTone(vec3 color, float shadowHue, float highlightHue, float balance) {
+  float lum = getLuma(color);
+  
+  // Convert hue (0-360) to normalized (0-1)
+  float sHue = shadowHue / 360.0;
+  float hHue = highlightHue / 360.0;
+  
+  // Create tint colors
+  vec3 shadowTint = hsl2rgb(vec3(sHue, 0.5, 0.5));
+  vec3 highlightTint = hsl2rgb(vec3(hHue, 0.5, 0.5));
+  
+  // Blend based on luminance
+  float shadowAmount = smoothstep(balance, 0.0, lum) * 0.3;
+  float highlightAmount = smoothstep(1.0 - balance, 1.0, lum) * 0.3;
+  
+  color = mix(color, color * shadowTint * 2.0, shadowAmount);
+  color = mix(color, color * highlightTint * 2.0, highlightAmount);
+  
+  return clamp(color, 0.0, 1.0);
+}
+
+vec3 applyColorPreset(vec3 color, int preset) {
+  if (preset == 0) return color; // none
+  
+  if (preset == 1) { // portra - warm, lifted blacks, soft contrast
+    color = applyTemperature(color, 0.15);
+    color = applyContrast(color, 0.9);
+    color = applySaturation(color, 0.85);
+    color = mix(color, color + vec3(0.02, 0.01, 0.0), 0.5); // lift shadows
+    color.r *= 1.05;
+  }
+  else if (preset == 2) { // cinematic - teal shadows, orange highlights
+    float lum = getLuma(color);
+    vec3 teal = vec3(0.0, 0.15, 0.2);
+    vec3 orange = vec3(0.2, 0.1, 0.0);
+    color = mix(color + teal * (1.0 - lum), color + orange * lum, lum);
+    color = applyContrast(color, 1.15);
+    color = applySaturation(color, 0.9);
+  }
+  else if (preset == 3) { // noir - B&W with slight blue tint
+    float lum = getLuma(color);
+    color = vec3(lum);
+    color = applyContrast(color, 1.3);
+    color = mix(color, color + vec3(-0.02, 0.0, 0.05), 0.5);
+  }
+  else if (preset == 4) { // vintage - faded, warm, low saturation
+    color = applyTemperature(color, 0.2);
+    color = applySaturation(color, 0.7);
+    color = applyContrast(color, 0.85);
+    color = mix(color, color + vec3(0.05, 0.03, -0.02), 0.5); // fade
+    color.b *= 0.9;
+  }
+  else if (preset == 5) { // cool-blue - cold, high contrast
+    color = applyTemperature(color, -0.25);
+    color = applyContrast(color, 1.1);
+    color = applySaturation(color, 0.95);
+    color.b *= 1.1;
+  }
+  
+  return clamp(color, 0.0, 1.0);
+}
+
+vec3 applyColorGrading(vec3 color) {
+  // Apply manual adjustments first
+  color = applyExposure(color, exposure);
+  color = applyTemperature(color, temperature);
+  color = applyTint(color, tint);
+  color = applyContrast(color, contrast);
+  color = applySaturation(color, saturation);
+  
+  // Apply split toning
+  if (splitToneEnabled) {
+    color = applySplitTone(color, splitToneShadowHue, splitToneHighlightHue, splitToneBalance);
+  }
+  
+  // Apply preset on top
+  color = applyColorPreset(color, colorPreset);
+  
+  return color;
+}
+
+// ============================================
+// ATMOSPHERE EFFECTS
+// ============================================
+
+vec3 applyFog(vec3 color, float depth) {
+  if (!fogEnabled) return color;
+  
+  float fogFactor = smoothstep(fogNear, fogFar, depth) * fogDensity;
+  return mix(color, fogColor, fogFactor);
+}
+
+vec3 applyDepthTint(vec3 color, float depth) {
+  if (!depthTintEnabled) return color;
+  
+  vec3 tint = mix(depthTintNearColor, depthTintFarColor, depth);
+  return mix(color, color * tint, depthTintIntensity);
+}
+
+// ============================================
+// LENS EFFECTS
+// ============================================
+
 vec2 applyLensDistortion(vec2 uv) {
   if (!lensDistortionEnabled || abs(lensDistortionAmount) < 0.001) return uv;
 
@@ -73,56 +291,479 @@ vec2 applyLensDistortion(vec2 uv) {
   return 0.5 + centered * distortion;
 }
 
-// Simple parallax with depth-based offset
-vec3 parallaxColor(vec2 uv) {
-  // Apply lens distortion first
-  vec2 distortedUv = applyLensDistortion(uv);
+vec2 applyAnamorphicDistortion(vec2 uv) {
+  if (!anamorphicEnabled) return uv;
+  
+  vec2 centered = uv - 0.5;
+  centered.x *= anamorphicStretch;
+  return centered + 0.5;
+}
 
-  // Clamp to avoid sampling outside texture
-  if (distortedUv.x < 0.0 || distortedUv.x > 1.0 || distortedUv.y < 0.0 || distortedUv.y > 1.0) {
-    return vec3(0.0);
+vec3 applyChromaticAberration(sampler2D tex, vec2 uv) {
+  if (!chromaticAberrationEnabled) {
+    return texture2D(tex, uv).rgb;
   }
 
-  // Sample depth
-  float depth = texture2D(depthMap, distortedUv).r;
+  vec2 direction = uv - 0.5;
+  float dist = length(direction);
+  vec2 offset = direction * dist * chromaticAberrationIntensity * 0.01;
 
-  // Calculate parallax offset based on depth and camera position
-  vec2 parallaxOffset = vec2(customCameraPos.x, customCameraPos.y) * depth * parallaxStrength * 0.1;
-  vec2 parallaxUv = distortedUv + parallaxOffset;
+  float r = texture2D(tex, uv - offset).r;
+  float g = texture2D(tex, uv).g;
+  float b = texture2D(tex, uv + offset).b;
 
-  // Apply chromatic aberration
-  vec3 color = applyChromaticAberration(colorMap, parallaxUv);
+  return vec3(r, g, b);
+}
 
-  // Simple depth of field simulation
-  float depthDiff = abs(depth - focusDistance);
-  float blur = depthDiff * aperture;
+// Anamorphic horizontal lens flare
+vec3 applyLensFlare(vec3 color, vec2 uv, float depth) {
+  if (!lensFlareEnabled || !anamorphicEnabled) return color;
+  
+  float brightness = getLuma(color);
+  if (brightness < 0.7) return color;
+  
+  // Horizontal streak
+  float streak = 0.0;
+  for (float i = -8.0; i <= 8.0; i += 1.0) {
+    vec2 sampleUv = uv + vec2(i * 0.01, 0.0);
+    if (sampleUv.x >= 0.0 && sampleUv.x <= 1.0) {
+      vec3 sampleColor = texture2D(colorMap, sampleUv).rgb;
+      float sampleBright = getLuma(sampleColor);
+      if (sampleBright > 0.8) {
+        streak += sampleBright * exp(-abs(i) * 0.3);
+      }
+    }
+  }
+  
+  streak *= lensFlareIntensity * 0.1;
+  vec3 flareColor = vec3(0.9, 0.95, 1.0) * streak;
+  
+  return color + flareColor;
+}
 
-  // If high blur, sample neighbors (simple box blur)
-  if (blur > 0.1) {
-    vec3 blurred = color;
-    float samples = 0.0;
-    float blurSize = blur * 0.01;
+// ============================================
+// DEPTH OF FIELD
+// ============================================
 
+// Tilt-shift blur calculation
+float getTiltShiftBlur(vec2 uv) {
+  if (!tiltShiftEnabled) return 0.0;
+  
+  // Rotate UV based on angle
+  float angle = tiltShiftAngle * 3.14159 / 180.0;
+  vec2 centered = uv - 0.5;
+  float rotatedY = -centered.x * sin(angle) + centered.y * cos(angle);
+  float pos = rotatedY + 0.5;
+  
+  // Distance from focus band
+  float dist = abs(pos - tiltShiftPosition);
+  return smoothstep(0.0, 0.3, dist) * tiltShiftBlur;
+}
+
+// Bokeh sampling patterns
+vec3 sampleBokeh(sampler2D tex, vec2 uv, float blurAmount, int quality) {
+  if (blurAmount < 0.01) return texture2D(tex, uv).rgb;
+  
+  vec3 color = vec3(0.0);
+  float totalWeight = 0.0;
+  float blurSize = blurAmount * 0.015;
+  
+  if (quality == 0) { // Fast - 9 samples box
     for (float x = -1.0; x <= 1.0; x += 1.0) {
       for (float y = -1.0; y <= 1.0; y += 1.0) {
         vec2 offset = vec2(x, y) * blurSize;
-        blurred += texture2D(colorMap, parallaxUv + offset).rgb;
-        samples += 1.0;
+        if (anamorphicEnabled) offset.x *= anamorphicStretch; // Oval bokeh
+        vec3 sample_color = texture2D(tex, uv + offset).rgb;
+        color += sample_color;
+        totalWeight += 1.0;
       }
     }
+  }
+  else if (quality == 1) { // Medium - 13 samples circular
+    float samples[26];
+    samples[0] = 0.0; samples[1] = 0.0;
+    samples[2] = 1.0; samples[3] = 0.0;
+    samples[4] = -1.0; samples[5] = 0.0;
+    samples[6] = 0.0; samples[7] = 1.0;
+    samples[8] = 0.0; samples[9] = -1.0;
+    samples[10] = 0.707; samples[11] = 0.707;
+    samples[12] = -0.707; samples[13] = 0.707;
+    samples[14] = 0.707; samples[15] = -0.707;
+    samples[16] = -0.707; samples[17] = -0.707;
+    samples[18] = 0.5; samples[19] = 0.0;
+    samples[20] = -0.5; samples[21] = 0.0;
+    samples[22] = 0.0; samples[23] = 0.5;
+    samples[24] = 0.0; samples[25] = -0.5;
+    
+    for (int i = 0; i < 26; i += 2) {
+      vec2 offset = vec2(samples[i], samples[i+1]) * blurSize;
+      if (anamorphicEnabled) offset.x *= anamorphicStretch;
+      vec3 sample_color = texture2D(tex, uv + offset).rgb;
+      // Highlight bloom - bright samples get extra weight
+      float brightness = getLuma(sample_color);
+      float weight = 1.0 + brightness * brightness * 2.0;
+      color += sample_color * weight;
+      totalWeight += weight;
+    }
+  }
+  else { // High - 25 samples disk with highlight bloom
+    for (float angle = 0.0; angle < 6.28; angle += 0.785) {
+      for (float r = 0.33; r <= 1.0; r += 0.33) {
+        vec2 offset = vec2(cos(angle), sin(angle)) * r * blurSize;
+        if (anamorphicEnabled) offset.x *= anamorphicStretch;
+        vec3 sample_color = texture2D(tex, uv + offset).rgb;
+        float brightness = getLuma(sample_color);
+        float weight = 1.0 + pow(brightness, 3.0) * 4.0;
+        color += sample_color * weight;
+        totalWeight += weight;
+      }
+    }
+    // Center sample
+    vec3 centerSample = texture2D(tex, uv).rgb;
+    color += centerSample;
+    totalWeight += 1.0;
+  }
+  
+  return color / totalWeight;
+}
 
-    color = mix(color, blurred / samples, clamp(blur * 2.0, 0.0, 1.0));
+// ============================================
+// POST PROCESSING
+// ============================================
+
+vec3 applyFilmGrain(vec3 color, vec2 uv) {
+  if (!filmGrainEnabled) return color;
+
+  float grain = random(uv * time) * 2.0 - 1.0;
+  return color + grain * filmGrainIntensity * 0.1;
+}
+
+vec3 applyVignette(vec3 color, vec2 uv) {
+  if (!vignetteEnabled) return color;
+
+  vec2 centered = uv - 0.5;
+  if (anamorphicEnabled) centered.x /= anamorphicStretch;
+  float dist = length(centered);
+  float vignette = smoothstep(0.8, 0.3, dist);
+  vignette = mix(1.0, vignette, vignetteIntensity);
+
+  return color * vignette;
+}
+
+vec3 applyBloom(vec3 color, vec2 uv) {
+  if (!bloomEnabled) return color;
+  
+  vec3 bloom = vec3(0.0);
+  float totalWeight = 0.0;
+  
+  // Sample surrounding pixels for bloom
+  for (float x = -2.0; x <= 2.0; x += 1.0) {
+    for (float y = -2.0; y <= 2.0; y += 1.0) {
+      vec2 offset = vec2(x, y) * 0.005;
+      vec3 sample_color = texture2D(colorMap, uv + offset).rgb;
+      float brightness = getLuma(sample_color);
+      if (brightness > bloomThreshold) {
+        float weight = exp(-(x*x + y*y) * 0.2);
+        bloom += (sample_color - bloomThreshold) * weight;
+        totalWeight += weight;
+      }
+    }
+  }
+  
+  if (totalWeight > 0.0) {
+    bloom /= totalWeight;
+    color += bloom * bloomIntensity;
+  }
+  
+  return clamp(color, 0.0, 1.0);
+}
+
+vec3 applyHalation(vec3 color, vec2 uv) {
+  if (!halationEnabled) return color;
+  
+  vec3 halation = vec3(0.0);
+  float totalWeight = 0.0;
+  
+  // Red-tinted bloom for halation
+  for (float x = -3.0; x <= 3.0; x += 1.0) {
+    for (float y = -3.0; y <= 3.0; y += 1.0) {
+      vec2 offset = vec2(x, y) * 0.004;
+      vec3 sample_color = texture2D(colorMap, uv + offset).rgb;
+      float brightness = getLuma(sample_color);
+      if (brightness > 0.6) {
+        float weight = exp(-(x*x + y*y) * 0.15);
+        halation += sample_color * weight;
+        totalWeight += weight;
+      }
+    }
+  }
+  
+  if (totalWeight > 0.0) {
+    halation /= totalWeight;
+    // Red shift for film halation effect
+    halation = vec3(halation.r * 1.3, halation.g * 0.9, halation.b * 0.7);
+    color += halation * halationIntensity * 0.3;
+  }
+  
+  return clamp(color, 0.0, 1.0);
+}
+
+vec3 applySharpen(vec3 color, vec2 uv) {
+  if (!sharpenEnabled) return color;
+  
+  vec2 texel = 1.0 / resolution;
+  
+  vec3 n = texture2D(colorMap, uv + vec2(0.0, -texel.y)).rgb;
+  vec3 s = texture2D(colorMap, uv + vec2(0.0, texel.y)).rgb;
+  vec3 e = texture2D(colorMap, uv + vec2(texel.x, 0.0)).rgb;
+  vec3 w = texture2D(colorMap, uv + vec2(-texel.x, 0.0)).rgb;
+  
+  vec3 edge = color * 5.0 - n - s - e - w;
+  
+  return clamp(color + edge * sharpenIntensity * 0.5, 0.0, 1.0);
+}
+
+// ============================================
+// RENDER MODES
+// ============================================
+
+// Heat map for depth visualization
+vec3 depthToHeatmap(float depth) {
+  vec3 cold = vec3(0.0, 0.0, 0.5);
+  vec3 cool = vec3(0.0, 0.5, 1.0);
+  vec3 mid = vec3(0.0, 1.0, 0.0);
+  vec3 warm = vec3(1.0, 1.0, 0.0);
+  vec3 hot = vec3(1.0, 0.0, 0.0);
+  
+  if (depth < 0.25) return mix(cold, cool, depth * 4.0);
+  if (depth < 0.5) return mix(cool, mid, (depth - 0.25) * 4.0);
+  if (depth < 0.75) return mix(mid, warm, (depth - 0.5) * 4.0);
+  return mix(warm, hot, (depth - 0.75) * 4.0);
+}
+
+// Derive normals from depth
+vec3 computeNormals(vec2 uv) {
+  vec2 texel = 1.0 / resolution;
+  
+  float depthC = texture2D(depthMap, uv).r;
+  float depthR = texture2D(depthMap, uv + vec2(texel.x, 0.0)).r;
+  float depthU = texture2D(depthMap, uv + vec2(0.0, texel.y)).r;
+  
+  vec3 dx = vec3(texel.x, 0.0, (depthR - depthC) * 2.0);
+  vec3 dy = vec3(0.0, texel.y, (depthU - depthC) * 2.0);
+  
+  vec3 normal = normalize(cross(dx, dy));
+  
+  // Map to 0-1 range for visualization
+  return normal * 0.5 + 0.5;
+}
+
+// ============================================
+// MAIN PARALLAX FUNCTION
+// ============================================
+
+// Parallax Occlusion Mapping with raymarching
+vec3 parallaxColorRaymarch(vec2 uv, out float outDepth) {
+  // Apply lens distortion first
+  vec2 distortedUv = applyLensDistortion(uv);
+  distortedUv = applyAnamorphicDistortion(distortedUv);
+
+  // Clamp to avoid sampling outside texture
+  if (distortedUv.x < 0.0 || distortedUv.x > 1.0 || distortedUv.y < 0.0 || distortedUv.y > 1.0) {
+    outDepth = 0.0;
+    return vec3(0.0);
+  }
+
+  // Calculate view direction from camera
+  vec2 viewDir = vec2(customCameraPos.x, customCameraPos.y) * parallaxStrength * 0.15;
+
+  // Raymarching parameters
+  const int minSteps = 8;
+  const int maxSteps = 32;
+  int numSteps = maxSteps;
+
+  // Step size for raymarching
+  float stepSize = 1.0 / float(numSteps);
+
+  // Initialize raymarch
+  vec2 currentUv = distortedUv;
+  float currentLayerDepth = 0.0;
+  vec2 deltaUv = viewDir * stepSize;
+
+  // Sample initial depth
+  float currentDepthMapValue = texture2D(depthMap, currentUv).r;
+
+  // Raymarch through depth layers
+  for (int i = 0; i < maxSteps; i++) {
+    // Break if we've hit the surface
+    if (currentLayerDepth >= currentDepthMapValue) break;
+
+    // Step forward
+    currentUv -= deltaUv;
+    currentDepthMapValue = texture2D(depthMap, currentUv).r;
+    currentLayerDepth += stepSize;
+  }
+
+  // Binary search refinement for better accuracy
+  vec2 prevUv = currentUv + deltaUv;
+  float prevLayerDepth = currentLayerDepth - stepSize;
+
+  for (int i = 0; i < 5; i++) {
+    vec2 midUv = (currentUv + prevUv) * 0.5;
+    float midDepth = (currentLayerDepth + prevLayerDepth) * 0.5;
+    float midDepthMapValue = texture2D(depthMap, midUv).r;
+
+    if (midDepth < midDepthMapValue) {
+      prevUv = midUv;
+      prevLayerDepth = midDepth;
+    } else {
+      currentUv = midUv;
+      currentLayerDepth = midDepth;
+    }
+  }
+
+  // Clamp final UV
+  vec2 finalUv = clamp(currentUv, 0.0, 1.0);
+
+  // Sample depth at final position
+  float depth = texture2D(depthMap, finalUv).r;
+  outDepth = depth;
+
+  // Calculate blur amount from DOF and tilt-shift
+  float depthDiff = abs(depth - focusDistance);
+  float dofBlur = depthDiff * aperture;
+  float tsBlur = getTiltShiftBlur(distortedUv);
+  float totalBlur = max(dofBlur, tsBlur);
+
+  // Sample with appropriate bokeh quality
+  vec3 color;
+  if (chromaticAberrationEnabled && totalBlur < 0.1) {
+    color = applyChromaticAberration(colorMap, finalUv);
+  } else {
+    color = sampleBokeh(colorMap, finalUv, totalBlur, bokehQuality);
+
+    // Apply chromatic aberration on top if enabled and not too blurry
+    if (chromaticAberrationEnabled && totalBlur < 0.5) {
+      vec3 caColor = applyChromaticAberration(colorMap, finalUv);
+      color = mix(caColor, color, totalBlur * 2.0);
+    }
   }
 
   return color;
 }
 
-void main() {
-  vec3 color = parallaxColor(vUv);
+// Simple UV offset parallax (original method)
+vec3 parallaxColorOffset(vec2 uv, out float outDepth) {
+  // Apply lens distortion first
+  vec2 distortedUv = applyLensDistortion(uv);
+  distortedUv = applyAnamorphicDistortion(distortedUv);
 
-  // Apply post-processing effects
-  color = applyFilmGrain(color, vUv);
-  color = applyVignette(color, vUv);
+  // Clamp to avoid sampling outside texture
+  if (distortedUv.x < 0.0 || distortedUv.x > 1.0 || distortedUv.y < 0.0 || distortedUv.y > 1.0) {
+    outDepth = 0.0;
+    return vec3(0.0);
+  }
+
+  // Sample depth
+  float depth = texture2D(depthMap, distortedUv).r;
+  outDepth = depth;
+
+  // Calculate parallax offset based on depth and camera position
+  vec2 parallaxOffset = vec2(customCameraPos.x, customCameraPos.y) * depth * parallaxStrength * 0.1;
+  vec2 parallaxUv = distortedUv + parallaxOffset;
+
+  // Clamp parallax UV
+  parallaxUv = clamp(parallaxUv, 0.0, 1.0);
+
+  // Calculate blur amount from DOF and tilt-shift
+  float depthDiff = abs(depth - focusDistance);
+  float dofBlur = depthDiff * aperture;
+  float tsBlur = getTiltShiftBlur(distortedUv);
+  float totalBlur = max(dofBlur, tsBlur);
+
+  // Sample with appropriate bokeh quality
+  vec3 color;
+  if (chromaticAberrationEnabled && totalBlur < 0.1) {
+    color = applyChromaticAberration(colorMap, parallaxUv);
+  } else {
+    color = sampleBokeh(colorMap, parallaxUv, totalBlur, bokehQuality);
+
+    // Apply chromatic aberration on top if enabled and not too blurry
+    if (chromaticAberrationEnabled && totalBlur < 0.5) {
+      vec3 caColor = applyChromaticAberration(colorMap, parallaxUv);
+      color = mix(caColor, color, totalBlur * 2.0);
+    }
+  }
+
+  return color;
+}
+
+// Main parallax dispatcher
+vec3 parallaxColor(vec2 uv, out float outDepth) {
+  if (parallaxMode == 1) {
+    return parallaxColorRaymarch(uv, outDepth);
+  } else {
+    return parallaxColorOffset(uv, outDepth);
+  }
+}
+
+// ============================================
+// MAIN
+// ============================================
+
+void main() {
+  float depth;
+  vec2 uv = vUv;
+  
+  // Handle split view
+  bool isSplitRight = false;
+  if (renderMode == 4 && uv.x > 0.5) {
+    isSplitRight = true;
+  }
+  
+  vec3 color = parallaxColor(uv, depth);
+  
+  // Render modes
+  if (renderMode == 1) { // Depth grayscale
+    color = vec3(depth);
+  }
+  else if (renderMode == 2) { // Depth heatmap
+    color = depthToHeatmap(depth);
+  }
+  else if (renderMode == 3) { // Normals
+    color = computeNormals(uv);
+  }
+  else if (renderMode == 4 && !isSplitRight) { // Split - left side is original
+    color = texture2D(colorMap, uv).rgb;
+  }
+  else {
+    // Normal rendering with all effects
+    
+    // Apply atmosphere
+    color = applyFog(color, depth);
+    color = applyDepthTint(color, depth);
+    
+    // Apply lens effects
+    color = applyLensFlare(color, uv, depth);
+    
+    // Apply color grading
+    color = applyColorGrading(color);
+    
+    // Apply post-processing
+    color = applyBloom(color, uv);
+    color = applyHalation(color, uv);
+    color = applySharpen(color, uv);
+    color = applyFilmGrain(color, uv);
+    color = applyVignette(color, uv);
+  }
+  
+  // Split view divider
+  if (renderMode == 4) {
+    float divider = abs(uv.x - 0.5);
+    if (divider < 0.002) {
+      color = vec3(1.0);
+    }
+  }
 
   gl_FragColor = vec4(color, 1.0);
 }

@@ -12,9 +12,16 @@
   let isDragging = false
   let isGeneratingDepth = false
   let depthError: string | null = null
+  let focusIndicator: { x: number; y: number; visible: boolean } = { x: 0, y: 0, visible: false }
+  let focusIndicatorTimeout: ReturnType<typeof setTimeout> | null = null
 
   onMount(() => {
     scene = createScene(canvas, $settings)
+
+    // Register time update callback for timeline sync
+    scene.setTimeUpdateCallback((time) => {
+      settings.update(s => ({ ...s, currentTime: time }))
+    })
 
     // Subscribe to settings changes
     const unsubscribe = settings.subscribe(s => {
@@ -30,6 +37,9 @@
 
   onDestroy(() => {
     scene?.dispose()
+    if (focusIndicatorTimeout) {
+      clearTimeout(focusIndicatorTimeout)
+    }
   })
 
   function handleDragOver(e: DragEvent) {
@@ -108,13 +118,53 @@
     }
   }
 
-  function handleClick() {
+  function handleViewportClick(e: MouseEvent) {
+    // If no image loaded, open file picker
     if (!$settings.imageLoaded) {
       const input = document.createElement('input')
       input.type = 'file'
       input.accept = 'image/*'
       input.onchange = handleFileInput
       input.click()
+      return
+    }
+
+    // Click-to-focus: Cmd/Ctrl + Click
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault()
+      e.stopPropagation()
+      handleClickToFocus(e)
+    }
+  }
+
+  function handleClickToFocus(e: MouseEvent) {
+    if (!scene || !canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const x = (e.clientX - rect.left) / rect.width
+    const y = 1 - (e.clientY - rect.top) / rect.height // Flip Y for WebGL
+
+    // Sample depth at click position
+    const depth = scene.sampleDepthAt(x, y)
+    
+    if (depth !== null) {
+      // Set focus distance
+      settings.update(s => ({ ...s, focusDistance: depth }))
+
+      // Show focus indicator
+      focusIndicator = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        visible: true
+      }
+
+      // Hide indicator after animation
+      if (focusIndicatorTimeout) {
+        clearTimeout(focusIndicatorTimeout)
+      }
+      focusIndicatorTimeout = setTimeout(() => {
+        focusIndicator = { ...focusIndicator, visible: false }
+      }, 800)
     }
   }
 </script>
@@ -127,11 +177,31 @@
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
-  onclick={handleClick}
-  onkeydown={(e) => e.key === 'Enter' && handleClick()}
+  onclick={handleViewportClick}
+  onkeydown={(e) => e.key === 'Enter' && handleViewportClick(e as unknown as MouseEvent)}
   class:dragging={isDragging}
 >
   <canvas bind:this={canvas}></canvas>
+
+  {#if $settings.imageLoaded}
+    <!-- Shader mode switcher -->
+    <div class="shader-mode-switcher">
+      <button
+        class="mode-btn"
+        class:active={$settings.parallaxMode === 'offset'}
+        onclick={() => settings.update(s => ({ ...s, parallaxMode: 'offset' }))}
+      >
+        UV Offset
+      </button>
+      <button
+        class="mode-btn"
+        class:active={$settings.parallaxMode === 'raymarch'}
+        onclick={() => settings.update(s => ({ ...s, parallaxMode: 'raymarch' }))}
+      >
+        Raymarch
+      </button>
+    </div>
+  {/if}
 
   {#if !$settings.imageLoaded}
     <div class="empty-state">
@@ -147,7 +217,18 @@
     </div>
   {:else if !$settings.isPlaying}
     <div class="hint">
-      <p>Drag to rotate • Scroll to zoom • Right-click to pan</p>
+      <p>Drag to orbit • Scroll to zoom • ⌘+Click to set focus</p>
+    </div>
+  {/if}
+
+  <!-- Focus indicator -->
+  {#if focusIndicator.visible}
+    <div 
+      class="focus-indicator" 
+      style="left: {focusIndicator.x}px; top: {focusIndicator.y}px"
+    >
+      <div class="focus-ring"></div>
+      <div class="focus-crosshair"></div>
     </div>
   {/if}
 
@@ -223,6 +304,43 @@
     font-size: 0.875rem;
   }
 
+  .shader-mode-switcher {
+    position: absolute;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 0;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 6px;
+    padding: 4px;
+    backdrop-filter: blur(8px);
+    z-index: 5;
+  }
+
+  .mode-btn {
+    padding: 0.5rem 1rem;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.7);
+    border: none;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 80px;
+  }
+
+  .mode-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+  }
+
+  .mode-btn.active {
+    background: var(--accent);
+    color: white;
+  }
+
   .hint {
     position: absolute;
     bottom: 1rem;
@@ -241,6 +359,62 @@
     font-size: 0.75rem;
     color: white;
     margin: 0;
+  }
+
+  .focus-indicator {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  .focus-ring {
+    width: 48px;
+    height: 48px;
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+    animation: focusRingPulse 0.8s ease-out forwards;
+  }
+
+  .focus-crosshair {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 16px;
+    height: 16px;
+    transform: translate(-50%, -50%);
+  }
+
+  .focus-crosshair::before,
+  .focus-crosshair::after {
+    content: '';
+    position: absolute;
+    background: var(--accent);
+  }
+
+  .focus-crosshair::before {
+    width: 2px;
+    height: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  .focus-crosshair::after {
+    width: 100%;
+    height: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  @keyframes focusRingPulse {
+    0% {
+      transform: scale(0.5);
+      opacity: 1;
+    }
+    100% {
+      transform: scale(1.5);
+      opacity: 0;
+    }
   }
 
   .status-overlay {

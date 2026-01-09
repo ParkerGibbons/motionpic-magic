@@ -28,17 +28,21 @@ def generate_depth_map(image_data: bytes, output_path: str) -> float:
     try:
         # Try to use Depth Pro (Apple's model)
         return generate_with_depth_pro(image, output_path)
-    except (ImportError, Exception) as e:
-        print(f"Depth Pro not available: {e}")
-        
+    except ImportError as e:
+        print(f"Depth Pro not installed: {e}")
+    except Exception as e:
+        print(f"Depth Pro error: {e}")
+
     try:
         return generate_with_midas(image, output_path)
+    except ImportError as e:
+        error_msg = "MiDaS dependencies not installed. Please install: pip install transformers torch"
+        print(error_msg)
+        raise ImportError(error_msg)
     except Exception as e:
-        print(f"MiDaS not available: {e}")
-        
-    # Final fallback: luminance-based pseudo-depth
-    print("Using luminance fallback for depth estimation")
-    return generate_with_luminance(image, output_path)
+        error_msg = f"MiDaS depth generation failed: {str(e)}"
+        print(error_msg)
+        raise Exception(error_msg)
 
 
 def generate_with_depth_pro(image: Image.Image, output_path: str) -> float:
@@ -85,14 +89,29 @@ def generate_with_midas(image: Image.Image, output_path: str) -> float:
     try:
         import torch
         from transformers import DPTImageProcessor, DPTForDepthEstimation
+        import os
+        from pathlib import Path
 
-        # Load DPT model (downloads from Hugging Face)
-        processor = DPTImageProcessor.from_pretrained("Intel/dpt-hybrid-midas")
-        model = DPTForDepthEstimation.from_pretrained("Intel/dpt-hybrid-midas")
+        # Cache models in backend/models directory
+        cache_dir = Path(__file__).parent / "models"
+        cache_dir.mkdir(exist_ok=True)
+
+        print(f"Loading MiDaS model from cache: {cache_dir}")
+
+        # Load DPT model (will cache locally after first download)
+        processor = DPTImageProcessor.from_pretrained(
+            "Intel/dpt-hybrid-midas",
+            cache_dir=str(cache_dir)
+        )
+        model = DPTForDepthEstimation.from_pretrained(
+            "Intel/dpt-hybrid-midas",
+            cache_dir=str(cache_dir)
+        )
         model.eval()
 
         # Move to GPU if available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {device}")
         model.to(device)
 
         # Process image

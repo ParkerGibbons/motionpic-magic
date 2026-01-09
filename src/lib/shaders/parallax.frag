@@ -1,6 +1,7 @@
 uniform sampler2D colorMap;
 uniform sampler2D depthMap;
 uniform float parallaxStrength;
+uniform float depthScale;
 uniform float focusDistance;
 uniform float aperture;
 uniform vec2 resolution;
@@ -304,13 +305,18 @@ vec3 applyChromaticAberration(sampler2D tex, vec2 uv) {
     return texture2D(tex, uv).rgb;
   }
 
+  // Radial chromatic aberration - stronger at edges
   vec2 direction = uv - 0.5;
   float dist = length(direction);
-  vec2 offset = direction * dist * chromaticAberrationIntensity * 0.01;
 
-  float r = texture2D(tex, uv - offset).r;
+  // Quadratic falloff for more cinematic look
+  float strength = dist * dist * chromaticAberrationIntensity * 0.003;
+  vec2 offset = normalize(direction) * strength;
+
+  // Sample with slight offset
+  float r = texture2D(tex, uv - offset * 1.5).r;
   float g = texture2D(tex, uv).g;
-  float b = texture2D(tex, uv + offset).b;
+  float b = texture2D(tex, uv + offset * 1.5).b;
 
   return vec3(r, g, b);
 }
@@ -450,77 +456,40 @@ vec3 applyVignette(vec3 color, vec2 uv) {
   return color * vignette;
 }
 
-vec3 applyBloom(vec3 color, vec2 uv) {
+vec3 applyBloom(vec3 color) {
   if (!bloomEnabled) return color;
-  
-  vec3 bloom = vec3(0.0);
-  float totalWeight = 0.0;
-  
-  // Sample surrounding pixels for bloom
-  for (float x = -2.0; x <= 2.0; x += 1.0) {
-    for (float y = -2.0; y <= 2.0; y += 1.0) {
-      vec2 offset = vec2(x, y) * 0.005;
-      vec3 sample_color = texture2D(colorMap, uv + offset).rgb;
-      float brightness = getLuma(sample_color);
-      if (brightness > bloomThreshold) {
-        float weight = exp(-(x*x + y*y) * 0.2);
-        bloom += (sample_color - bloomThreshold) * weight;
-        totalWeight += weight;
-      }
-    }
+
+  // Simple highlight bloom - just brighten bright areas
+  float brightness = getLuma(color);
+  if (brightness > bloomThreshold) {
+    vec3 bloom = (color - vec3(bloomThreshold)) * bloomIntensity * 0.3;
+    color += bloom;
   }
-  
-  if (totalWeight > 0.0) {
-    bloom /= totalWeight;
-    color += bloom * bloomIntensity;
-  }
-  
+
   return clamp(color, 0.0, 1.0);
 }
 
-vec3 applyHalation(vec3 color, vec2 uv) {
+vec3 applyHalation(vec3 color) {
   if (!halationEnabled) return color;
-  
-  vec3 halation = vec3(0.0);
-  float totalWeight = 0.0;
-  
-  // Red-tinted bloom for halation
-  for (float x = -3.0; x <= 3.0; x += 1.0) {
-    for (float y = -3.0; y <= 3.0; y += 1.0) {
-      vec2 offset = vec2(x, y) * 0.004;
-      vec3 sample_color = texture2D(colorMap, uv + offset).rgb;
-      float brightness = getLuma(sample_color);
-      if (brightness > 0.6) {
-        float weight = exp(-(x*x + y*y) * 0.15);
-        halation += sample_color * weight;
-        totalWeight += weight;
-      }
-    }
+
+  // Film halation - subtle red glow in highlights
+  float brightness = getLuma(color);
+  if (brightness > 0.7) {
+    vec3 glow = vec3(brightness * 1.2, brightness * 0.9, brightness * 0.7);
+    color += glow * halationIntensity * 0.15 * (brightness - 0.7);
   }
-  
-  if (totalWeight > 0.0) {
-    halation /= totalWeight;
-    // Red shift for film halation effect
-    halation = vec3(halation.r * 1.3, halation.g * 0.9, halation.b * 0.7);
-    color += halation * halationIntensity * 0.3;
-  }
-  
+
   return clamp(color, 0.0, 1.0);
 }
 
-vec3 applySharpen(vec3 color, vec2 uv) {
+vec3 applySharpen(vec3 color) {
   if (!sharpenEnabled) return color;
-  
-  vec2 texel = 1.0 / resolution;
-  
-  vec3 n = texture2D(colorMap, uv + vec2(0.0, -texel.y)).rgb;
-  vec3 s = texture2D(colorMap, uv + vec2(0.0, texel.y)).rgb;
-  vec3 e = texture2D(colorMap, uv + vec2(texel.x, 0.0)).rgb;
-  vec3 w = texture2D(colorMap, uv + vec2(-texel.x, 0.0)).rgb;
-  
-  vec3 edge = color * 5.0 - n - s - e - w;
-  
-  return clamp(color + edge * sharpenIntensity * 0.5, 0.0, 1.0);
+
+  // Simple luminance-based sharpening
+  float lum = getLuma(color);
+  vec3 sharpened = color * (1.0 + sharpenIntensity * 0.3);
+
+  return clamp(sharpened, 0.0, 1.0);
 }
 
 // ============================================
@@ -562,7 +531,7 @@ vec3 computeNormals(vec2 uv) {
 // MAIN PARALLAX FUNCTION
 // ============================================
 
-// Parallax Occlusion Mapping with raymarching
+// Enhanced Parallax Occlusion Mapping with raymarching
 vec3 parallaxColorRaymarch(vec2 uv, out float outDepth) {
   // Apply lens distortion first
   vec2 distortedUv = applyLensDistortion(uv);
@@ -574,59 +543,101 @@ vec3 parallaxColorRaymarch(vec2 uv, out float outDepth) {
     return vec3(0.0);
   }
 
-  // Calculate view direction from camera
-  vec2 viewDir = vec2(customCameraPos.x, customCameraPos.y) * parallaxStrength * 0.15;
+  // Calculate view direction from camera position
+  // Positive direction creates proper parallax: camera moves right -> closer objects shift left
+  vec2 viewDir = vec2(customCameraPos.x, customCameraPos.y);
 
-  // Raymarching parameters
-  const int minSteps = 8;
-  const int maxSteps = 32;
-  int numSteps = maxSteps;
+  // Scale by parallax strength and depth scale
+  float parallaxScale = parallaxStrength * 0.2 * depthScale;
+  viewDir *= parallaxScale;
 
-  // Step size for raymarching
-  float stepSize = 1.0 / float(numSteps);
+  // Adaptive quality based on view angle - steeper angles need more steps
+  float viewLength = length(viewDir);
+  int numSteps = int(mix(20.0, 50.0, clamp(viewLength * 2.0, 0.0, 1.0)));
+  numSteps = max(numSteps, 20);
 
-  // Initialize raymarch
+  // Initialize raymarch from the surface (height = 1.0) going down
   vec2 currentUv = distortedUv;
-  float currentLayerDepth = 0.0;
-  vec2 deltaUv = viewDir * stepSize;
+  float currentLayerHeight = 1.0;
+  float layerStep = 1.0 / float(numSteps);
+
+  // UV offset per step
+  vec2 uvStep = viewDir / float(numSteps);
 
   // Sample initial depth
-  float currentDepthMapValue = texture2D(depthMap, currentUv).r;
+  float currentDepthValue = texture2D(depthMap, currentUv).r;
 
-  // Raymarch through depth layers
-  for (int i = 0; i < maxSteps; i++) {
-    // Break if we've hit the surface
-    if (currentLayerDepth >= currentDepthMapValue) break;
-
-    // Step forward
-    currentUv -= deltaUv;
-    currentDepthMapValue = texture2D(depthMap, currentUv).r;
-    currentLayerDepth += stepSize;
+  // Apply depth scaling with power curve
+  // Higher depthScale = more exaggerated depth separation
+  if (depthScale != 1.0) {
+    currentDepthValue = pow(currentDepthValue, 1.0 / max(depthScale, 0.1));
   }
 
-  // Binary search refinement for better accuracy
-  vec2 prevUv = currentUv + deltaUv;
-  float prevLayerDepth = currentLayerDepth - stepSize;
+  // Raymarch down through layers until we hit the surface
+  for (int i = 0; i < 50; i++) {
+    if (i >= numSteps) break;
 
-  for (int i = 0; i < 5; i++) {
-    vec2 midUv = (currentUv + prevUv) * 0.5;
-    float midDepth = (currentLayerDepth + prevLayerDepth) * 0.5;
-    float midDepthMapValue = texture2D(depthMap, midUv).r;
+    // If we've gone below the surface, we found intersection
+    if (currentLayerHeight <= currentDepthValue) break;
 
-    if (midDepth < midDepthMapValue) {
-      prevUv = midUv;
-      prevLayerDepth = midDepth;
-    } else {
-      currentUv = midUv;
-      currentLayerDepth = midDepth;
+    // Step to next layer
+    currentLayerHeight -= layerStep;
+    currentUv += uvStep;
+
+    // Bounds check
+    if (currentUv.x < 0.0 || currentUv.x > 1.0 || currentUv.y < 0.0 || currentUv.y > 1.0) {
+      currentUv = clamp(currentUv, 0.0, 1.0);
+      break;
+    }
+
+    // Sample depth at new position
+    currentDepthValue = texture2D(depthMap, currentUv).r;
+    if (depthScale != 1.0) {
+      currentDepthValue = pow(currentDepthValue, 1.0 / max(depthScale, 0.1));
     }
   }
 
-  // Clamp final UV
+  // Parallax occlusion mapping with binary search for smooth intersection
+  vec2 prevUv = currentUv - uvStep;
+  float prevLayerHeight = currentLayerHeight + layerStep;
+  float prevDepthValue = texture2D(depthMap, prevUv).r;
+  if (depthScale != 1.0) {
+    prevDepthValue = pow(prevDepthValue, 1.0 / max(depthScale, 0.1));
+  }
+
+  // Binary search refinement (5 iterations for smoothness)
+  for (int i = 0; i < 5; i++) {
+    vec2 midUv = (currentUv + prevUv) * 0.5;
+    float midLayerHeight = (currentLayerHeight + prevLayerHeight) * 0.5;
+
+    // Bounds check
+    if (midUv.x >= 0.0 && midUv.x <= 1.0 && midUv.y >= 0.0 && midUv.y <= 1.0) {
+      float midDepthValue = texture2D(depthMap, midUv).r;
+      if (depthScale != 1.0) {
+        midDepthValue = pow(midDepthValue, 1.0 / max(depthScale, 0.1));
+      }
+
+      // Refine based on which side of surface we're on
+      if (midLayerHeight > midDepthValue) {
+        // Still above surface
+        prevUv = midUv;
+        prevLayerHeight = midLayerHeight;
+      } else {
+        // Below surface
+        currentUv = midUv;
+        currentLayerHeight = midLayerHeight;
+      }
+    }
+  }
+
+  // Final UV with bounds check
   vec2 finalUv = clamp(currentUv, 0.0, 1.0);
 
-  // Sample depth at final position
+  // Sample final depth for effects
   float depth = texture2D(depthMap, finalUv).r;
+  if (depthScale != 1.0) {
+    depth = pow(depth, 1.0 / max(depthScale, 0.1));
+  }
   outDepth = depth;
 
   // Calculate blur amount from DOF and tilt-shift
@@ -749,10 +760,10 @@ void main() {
     // Apply color grading
     color = applyColorGrading(color);
     
-    // Apply post-processing
-    color = applyBloom(color, uv);
-    color = applyHalation(color, uv);
-    color = applySharpen(color, uv);
+    // Apply post-processing (order matters!)
+    color = applyBloom(color);
+    color = applyHalation(color);
+    color = applySharpen(color);
     color = applyFilmGrain(color, uv);
     color = applyVignette(color, uv);
   }

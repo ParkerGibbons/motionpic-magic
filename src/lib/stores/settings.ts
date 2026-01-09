@@ -34,6 +34,7 @@ export interface Settings {
   // Parallax
   parallaxMode: ParallaxMode
   parallaxStrength: number
+  depthScale: number
 
   // DOF
   focusDistance: number
@@ -123,8 +124,9 @@ export const settings = writable<Settings>({
   cameraRotationY: 0,
   cameraRotationZ: 0,
 
-  parallaxMode: 'offset',
+  parallaxMode: 'raymarch',
   parallaxStrength: 0.5,
+  depthScale: 1.0,
 
   focusDistance: 0.5,
   aperture: 0.3,

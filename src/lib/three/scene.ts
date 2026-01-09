@@ -300,6 +300,7 @@ export function createScene(canvas: HTMLCanvasElement, initialSettings: Settings
       depthMap: { value: null },
       parallaxMode: { value: parallaxModeToInt(initialSettings.parallaxMode) },
       parallaxStrength: { value: initialSettings.parallaxStrength },
+      depthScale: { value: initialSettings.depthScale },
       focusDistance: { value: initialSettings.focusDistance },
       aperture: { value: initialSettings.aperture },
       resolution: { value: new THREE.Vector2() },
@@ -391,6 +392,10 @@ export function createScene(canvas: HTMLCanvasElement, initialSettings: Settings
   // Callback for time updates
   let onTimeUpdate: ((time: number) => void) | null = null
 
+  // Store camera state when switching between manual and playback
+  let savedCameraPosition: THREE.Vector3 | null = null
+  let savedCameraRotation: THREE.Euler | null = null
+
   // Handle resize
   function handleResize() {
     const width = canvas.clientWidth
@@ -418,6 +423,10 @@ export function createScene(canvas: HTMLCanvasElement, initialSettings: Settings
     // Current time for animation (from settings or advancing during playback)
     let animTime = currentSettings.currentTime
 
+    // Detect play/pause transitions
+    const wasPlaying = !controls.enabled
+    const nowPlaying = currentSettings.isPlaying
+
     if (currentSettings.isPlaying) {
       // Advance time
       animTime += deltaTime
@@ -442,6 +451,14 @@ export function createScene(canvas: HTMLCanvasElement, initialSettings: Settings
         camera.position.copy(result.position)
         camera.rotation.copy(result.rotation)
 
+        // Apply camera transform offsets (additive reframing)
+        camera.position.x += currentSettings.cameraOffsetX
+        camera.position.y += currentSettings.cameraOffsetY
+        camera.position.z += currentSettings.cameraOffsetZ
+        camera.rotation.x += currentSettings.cameraRotationX * Math.PI / 180
+        camera.rotation.y += currentSettings.cameraRotationY * Math.PI / 180
+        camera.rotation.z += currentSettings.cameraRotationZ * Math.PI / 180
+
         // Handle focus override from preset
         if (result.focusOverride !== undefined) {
           material.uniforms.focusDistance.value = result.focusOverride
@@ -458,6 +475,15 @@ export function createScene(canvas: HTMLCanvasElement, initialSettings: Settings
       }
     } else {
       // When not playing, enable manual orbit controls
+
+      // If we just stopped playback, update OrbitControls
+      if (wasPlaying && !nowPlaying) {
+        // Camera is already at playback position
+        // Update controls to know about it
+        controls.target.set(0, 0, 0)
+        controls.update()
+      }
+
       controls.enabled = true
       controls.update()
 
@@ -467,14 +493,6 @@ export function createScene(canvas: HTMLCanvasElement, initialSettings: Settings
         camera.updateProjectionMatrix()
       }
     }
-
-    // Apply camera transform offsets (additive reframing)
-    camera.position.x += currentSettings.cameraOffsetX
-    camera.position.y += currentSettings.cameraOffsetY
-    camera.position.z += currentSettings.cameraOffsetZ
-    camera.rotation.x += currentSettings.cameraRotationX * Math.PI / 180
-    camera.rotation.y += currentSettings.cameraRotationY * Math.PI / 180
-    camera.rotation.z += currentSettings.cameraRotationZ * Math.PI / 180
 
     // Apply camera shake (works in both playing and manual modes)
     const finalPos = camera.position.clone()
@@ -514,6 +532,7 @@ export function createScene(canvas: HTMLCanvasElement, initialSettings: Settings
       // Core uniforms
       material.uniforms.parallaxMode.value = parallaxModeToInt(settings.parallaxMode)
       material.uniforms.parallaxStrength.value = settings.parallaxStrength
+      material.uniforms.depthScale.value = settings.depthScale
       material.uniforms.focusDistance.value = settings.focusDistance
       material.uniforms.aperture.value = settings.aperture
 

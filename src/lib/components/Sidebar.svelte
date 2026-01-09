@@ -271,7 +271,7 @@
     <!-- Parallax Section -->
     <section class="section">
       <button class="section-header" onclick={() => toggleSection('parallax')}>
-        <span class="section-title">Parallax</span>
+        <span class="section-title">Parallax & Depth</span>
         <span class="chevron" class:expanded={expandedSections.parallax}>›</span>
       </button>
       {#if expandedSections.parallax}
@@ -288,6 +288,20 @@
                 disabled={!$settings.imageLoaded}
               />
               <span class="value">{($settings.parallaxStrength * 100).toFixed(0)}</span>
+            </label>
+          </div>
+          <div class="control-inline">
+            <label class="inline-label">
+              <span class="label-text">Depth Scale</span>
+              <input
+                type="range"
+                min="0.1"
+                max="3"
+                step="0.1"
+                bind:value={$settings.depthScale}
+                disabled={!$settings.imageLoaded}
+              />
+              <span class="value">{$settings.depthScale.toFixed(1)}x</span>
             </label>
           </div>
         </div>

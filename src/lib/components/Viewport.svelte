@@ -4,7 +4,7 @@
   import { createScene } from '../three/scene'
   import type { Scene } from '../three/scene'
   import CropOverlay from './CropOverlay.svelte'
-  import { generateDepthMap } from '../utils/api'
+  import { generateDepthMap } from '../utils/depth'
 
   let canvas: HTMLCanvasElement
   let container: HTMLDivElement
@@ -12,6 +12,7 @@
   let isDragging = false
   let isGeneratingDepth = false
   let depthError: string | null = null
+  let depthProgress: string | null = null
   let focusIndicator: { x: number; y: number; visible: boolean } = { x: 0, y: 0, visible: false }
   let focusIndicatorTimeout: ReturnType<typeof setTimeout> | null = null
 
@@ -75,6 +76,16 @@
   async function loadImage(file: File) {
     const colorUrl = URL.createObjectURL(file)
     depthError = null
+    depthProgress = null
+
+    // Create image element to get dimensions
+    const img = new Image()
+    img.src = colorUrl
+
+    await new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = reject
+    })
 
     // Show image immediately
     settings.update(s => ({
@@ -89,30 +100,49 @@
       await scene.loadTextures(colorUrl, colorUrl)
     }
 
-    // Generate depth map in background
+    // Generate depth map using client-side ML
     isGeneratingDepth = true
 
     try {
-      const response = await generateDepthMap(file)
+      const result = await generateDepthMap(img, (progress) => {
+        depthProgress = progress.status
+      })
 
-      console.log(`Depth map generated in ${response.processing_time_ms}ms`)
+      console.log(`Depth map generated in ${result.processingTime.toFixed(0)}ms`)
+
+      // Convert ImageData to blob URL
+      const depthCanvas = document.createElement('canvas')
+      depthCanvas.width = result.depthMap.width
+      depthCanvas.height = result.depthMap.height
+      const ctx = depthCanvas.getContext('2d')
+      if (!ctx) throw new Error('Failed to get canvas context')
+
+      ctx.putImageData(result.depthMap, 0, 0)
+
+      const depthBlob = await new Promise<Blob>((resolve) => {
+        depthCanvas.toBlob((blob) => resolve(blob!), 'image/png')
+      })
+
+      const depthUrl = URL.createObjectURL(depthBlob)
 
       // Update with real depth map
       settings.update(s => ({
         ...s,
-        depthMapUrl: response.depth_map_url
+        depthMapUrl: depthUrl
       }))
 
       // Reload textures with depth map
       if (scene) {
-        await scene.loadTextures(colorUrl, response.depth_map_url)
+        await scene.loadTextures(colorUrl, depthUrl)
       }
 
       isGeneratingDepth = false
+      depthProgress = null
     } catch (error) {
       console.error('Failed to generate depth map:', error)
       depthError = error instanceof Error ? error.message : 'Unknown error'
       isGeneratingDepth = false
+      depthProgress = null
 
       // Continue with placeholder depth (same as color)
     }
@@ -238,7 +268,7 @@
     <div class="status-overlay">
       <div class="status-content">
         <div class="spinner"></div>
-        <p>Generating depth map...</p>
+        <p>{depthProgress || 'Generating depth map...'}</p>
       </div>
     </div>
   {/if}

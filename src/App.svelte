@@ -3,10 +3,12 @@
   import Sidebar from './lib/components/Sidebar.svelte'
   import Timeline from './lib/components/Timeline.svelte'
   import ExportModal from './lib/components/ExportModal.svelte'
+  import ImageControls from './lib/components/ImageControls.svelte'
   import { settings } from './lib/stores/settings'
   import { theme, toggleTheme } from './lib/stores/theme'
 
   let showExportModal = false
+  let viewportComponent: { regenerateDepth: () => void } | undefined
 
   function openExportModal() {
     showExportModal = true
@@ -15,11 +17,25 @@
   function closeExportModal() {
     showExportModal = false
   }
+
+  function handleRegenerate() {
+    viewportComponent?.regenerateDepth()
+  }
 </script>
 
 <div class="app-container">
   <header class="header">
-    <h1>MOTIONPIC MAGIC</h1>
+    <div class="header-left">
+      <h1>MOTIONPIC MAGIC</h1>
+    </div>
+
+    <div class="header-center">
+      <ImageControls
+        imageUrl={$settings.colorMapUrl}
+        onRegenerate={handleRegenerate}
+      />
+    </div>
+
     <div class="header-actions">
       <button class="theme-toggle" onclick={toggleTheme} aria-label="Toggle theme">
         {$theme === 'dark' ? '☀' : '🌙'}
@@ -30,7 +46,7 @@
 
   <div class="main-content">
     <div class="viewport-area">
-      <Viewport />
+      <Viewport bind:this={viewportComponent} />
       <Timeline />
     </div>
     <Sidebar />
@@ -50,12 +66,23 @@
   }
 
   .header {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
+    gap: 1.5rem;
     padding: 1rem 1.5rem;
     border-bottom: 1px solid var(--border);
     background: var(--bg-secondary);
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+  }
+
+  .header-center {
+    display: flex;
+    justify-content: center;
   }
 
   h1 {
@@ -68,6 +95,7 @@
     display: flex;
     gap: 0.75rem;
     align-items: center;
+    justify-content: flex-end;
   }
 
   .theme-toggle {

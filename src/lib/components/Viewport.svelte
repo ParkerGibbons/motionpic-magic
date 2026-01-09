@@ -15,6 +15,7 @@
   let depthProgress: string | null = null
   let focusIndicator: { x: number; y: number; visible: boolean } = { x: 0, y: 0, visible: false }
   let focusIndicatorTimeout: ReturnType<typeof setTimeout> | null = null
+  let currentImageElement: HTMLImageElement | null = null
 
   onMount(() => {
     scene = createScene(canvas, $settings)
@@ -87,6 +88,8 @@
       img.onerror = reject
     })
 
+    currentImageElement = img
+
     // Show image immediately
     settings.update(s => ({
       ...s,
@@ -100,11 +103,19 @@
       await scene.loadTextures(colorUrl, colorUrl)
     }
 
-    // Generate depth map using client-side ML
+    // Generate depth map with current model selection
+    await generateDepth(img, colorUrl)
+  }
+
+  async function generateDepth(img: HTMLImageElement, colorUrl: string) {
     isGeneratingDepth = true
+    depthError = null
+    depthProgress = null
+
+    settings.update(s => ({ ...s, depthProcessing: true }))
 
     try {
-      const result = await generateDepthMap(img, (progress) => {
+      const result = await generateDepthMap(img, $settings.depthModel, (progress) => {
         depthProgress = progress.status
       })
 
@@ -128,7 +139,8 @@
       // Update with real depth map
       settings.update(s => ({
         ...s,
-        depthMapUrl: depthUrl
+        depthMapUrl: depthUrl,
+        depthProcessing: false
       }))
 
       // Reload textures with depth map
@@ -143,9 +155,15 @@
       depthError = error instanceof Error ? error.message : 'Unknown error'
       isGeneratingDepth = false
       depthProgress = null
+      settings.update(s => ({ ...s, depthProcessing: false }))
 
       // Continue with placeholder depth (same as color)
     }
+  }
+
+  export function regenerateDepth() {
+    if (!currentImageElement || !$settings.colorMapUrl) return
+    generateDepth(currentImageElement, $settings.colorMapUrl)
   }
 
   function handleViewportClick(e: MouseEvent) {

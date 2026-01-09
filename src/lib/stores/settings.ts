@@ -4,12 +4,15 @@ export type ColorPreset = 'none' | 'portra' | 'cinematic' | 'noir' | 'vintage' |
 export type BokehQuality = 'fast' | 'medium' | 'high'
 export type RenderMode = 'normal' | 'depth' | 'depth-color' | 'normals' | 'split'
 export type ParallaxMode = 'offset' | 'raymarch'
+export type DepthModel = 'depth-anything' | 'depth-anything-base' | 'depth-pro'
 
 export interface Settings {
   // Image state
   imageLoaded: boolean
   colorMapUrl: string | null
   depthMapUrl: string | null
+  depthModel: DepthModel
+  depthProcessing: boolean
 
   // Timeline
   currentTime: number
@@ -103,6 +106,8 @@ export const settings = writable<Settings>({
   imageLoaded: false,
   colorMapUrl: null,
   depthMapUrl: null,
+  depthModel: 'depth-anything-base',
+  depthProcessing: false,
 
   // Timeline
   currentTime: 0,

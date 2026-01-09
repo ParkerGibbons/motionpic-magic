@@ -69,6 +69,9 @@ backend/outputs/
 backend/models/
 .cache/
 
+# Compiled libraries
+*.dylib
+
 # Jupyter (if used)
 .ipynb_checkpoints/
 

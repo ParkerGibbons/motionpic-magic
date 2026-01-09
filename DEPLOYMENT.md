@@ -1,5 +1,137 @@
 # Deployment Guide
 
+## Prerequisites: Publishing to GitHub
+
+Before deploying, you need to publish your repository to GitHub. This repository was configured to exclude large files that can't be pushed to GitHub.
+
+### What Was Cleaned Up
+
+The following large files and directories have been excluded from git tracking:
+
+- `backend/venv/` - Python virtual environment (198MB+ of packages)
+- `backend/models/` - AI model cache (models download on first use)
+- Compiled libraries (`.dylib`, `.so` files)
+
+These are already listed in `.gitignore` and won't be tracked going forward.
+
+### First-Time GitHub Setup
+
+1. **Create GitHub repository:**
+   ```bash
+   # Go to github.com and create a new repository
+   # Name it: motionpic-magic
+   # Don't initialize with README (we already have one)
+   ```
+
+2. **Link your local repo to GitHub:**
+   ```bash
+   # Add GitHub as remote (replace YOUR_USERNAME)
+   git remote add origin https://github.com/YOUR_USERNAME/motionpic-magic.git
+   ```
+
+3. **Commit the cleanup changes:**
+   ```bash
+   # Stage all changes (venv removal + new files)
+   git add .
+
+   # Commit with descriptive message
+   git commit -m "chore: prepare for GitHub deployment
+
+   - Remove backend/venv from git tracking
+   - Add .gitattributes for file handling
+   - Add GitHub Actions workflow for Vercel deployment
+   - Update .gitignore for compiled libraries
+
+   Backend venv and models excluded - recreate locally with:
+   cd backend && python -m venv venv && pip install -r requirements.txt"
+   ```
+
+4. **Push to GitHub:**
+   ```bash
+   # Push to GitHub
+   git push -u origin main
+   ```
+
+### Troubleshooting GitHub Push Issues
+
+**Error: "file exceeds GitHub's file size limit"**
+
+If you still see this error, some large files might still be in git history:
+
+```bash
+# Check current repo size
+git count-objects -vH
+
+# If size is > 100MB, check what's tracked
+git ls-files | xargs -n1 git ls-files -s | sort -k4 -n -r | head -20
+```
+
+If large files appear, they need to be removed from history. This is more complex - ask for help with this specific issue.
+
+**Error: "remote: Permission denied"**
+
+You need to authenticate with GitHub:
+
+```bash
+# Use SSH (recommended)
+git remote set-url origin git@github.com:YOUR_USERNAME/motionpic-magic.git
+
+# Or configure GitHub CLI
+gh auth login
+```
+
+**Push is very slow:**
+
+This is normal if you have large files in `test_images/`. Consider:
+- Using Git LFS for test images: `git lfs track "test_images/*.jpg"`
+- Or remove test images from git: Add `test_images/` to `.gitignore`
+
+### Verifying the Push
+
+After pushing, verify on GitHub:
+
+1. Go to `https://github.com/YOUR_USERNAME/motionpic-magic`
+2. Check repository size (should be < 50MB)
+3. Verify `backend/venv/` is NOT visible in file browser
+4. Check that `.github/workflows/deploy.yml` is present
+
+### Setting Up Automatic Deployment
+
+The repository includes a GitHub Actions workflow (`.github/workflows/deploy.yml`) that automatically deploys to Vercel when you push to main.
+
+**Required GitHub Secrets:**
+
+Add these in your GitHub repository settings (Settings → Secrets and variables → Actions):
+
+1. `VERCEL_TOKEN` - Your Vercel API token
+2. `VERCEL_ORG_ID` - Your Vercel organization ID
+3. `VERCEL_PROJECT_ID` - Your Vercel project ID
+
+**Getting Vercel credentials:**
+
+```bash
+# Install Vercel CLI
+npm i -g vercel
+
+# Login to Vercel
+vercel login
+
+# Link your project (run in project root)
+vercel link
+
+# Get your credentials
+cat .vercel/project.json
+# Copy "orgId" and "projectId"
+
+# Get your token from: https://vercel.com/account/tokens
+```
+
+Add these values as GitHub secrets, then every push to `main` will automatically deploy to Vercel!
+
+**Disable Auto-Deploy (Optional):**
+
+If you prefer manual deployments, delete or rename `.github/workflows/deploy.yml`.
+
 ## Quick Deploy Options
 
 ### Option 1: Netlify (Recommended)
